@@ -43,6 +43,13 @@ class PostmanCollectionWriter
                     'name' => 'string',
                     'value' => $this->baseUrl,
                 ],
+                [
+                    'id' => 'accessToken',
+                    'key' => 'accessToken',
+                    'type' => 'string',
+                    'name' => 'string',
+                    'value' => '',
+                ],
             ],
             'info' => [
                 'name' => $this->config->get('title') ?: config('app.name'),
@@ -146,7 +153,7 @@ class PostmanCollectionWriter
         }
 
         $endpointItem = [
-            'name' => $endpoint->metadata->title !== '' ? $endpoint->metadata->title : ($endpoint->httpMethods[0].' '.$endpoint->uri),
+            'name' => $endpoint->uri,
             'request' => [
                 'url' => $this->generateUrlObject($endpoint),
                 'method' => $method,

@@ -11,11 +11,12 @@ class GetFromDocBlocks extends Strategy
 {
     public function __invoke(ExtractedEndpointData $endpointData, array $routeRules = []): array
     {
+        $group = substr($endpointData->controller->name, 0,20);
         $docBlocks = RouteDocBlocker::getDocBlocksFromRoute($endpointData->route);
         $methodDocBlock = $docBlocks['method'];
         $classDocBlock = $docBlocks['class'];
 
-        return $this->getMetadataFromDocBlock($methodDocBlock, $classDocBlock);
+        return array_merge($this->getMetadataFromDocBlock($methodDocBlock, $classDocBlock), ['groupName'=> $group]);
     }
 
     public function getMetadataFromDocBlock(DocBlock $methodDocBlock, DocBlock $classDocBlock): array

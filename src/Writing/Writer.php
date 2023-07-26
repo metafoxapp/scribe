@@ -7,6 +7,7 @@ use Knuckles\Scribe\Tools\ConsoleOutputUtils as c;
 use Knuckles\Scribe\Tools\DocumentationConfig;
 use Knuckles\Scribe\Tools\Globals;
 use Knuckles\Scribe\Tools\Utils;
+use MetaFox\Platform\ApiDoc\MdxWriter;
 use Symfony\Component\Yaml\Yaml;
 
 class Writer
@@ -67,6 +68,8 @@ class Writer
         // For 'laravel' docs, the output files (index.blade.php, collection.json)
         // go in resources/views/scribe/ and storage/app/scribe/ respectively.
 
+//        app()->makeWith(MdxWriter::class, ['config'=> $this->config])->generateMdx($groupedEndpoints);
+//
         $this->writeHtmlDocs($groupedEndpoints);
 
         $this->writePostmanCollection($groupedEndpoints);
