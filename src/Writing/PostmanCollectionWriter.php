@@ -274,12 +274,15 @@ class PostmanCollectionWriter
 
     protected function generateUrlObject(OutputEndpointData $endpointData): array
     {
+        $path = $endpointData->uri;
+        if(str_starts_with($path, 'api/{ver}')){
+            $path = substr($path, 10);
+        }
+
         $base = [
             'host' => '{{baseUrl}}',
             // Change laravel/symfony URL params ({example}) to Postman style, prefixed with a colon
-            'path' => preg_replace_callback('/\{(\w+)\??}/', function ($matches) {
-                return ':' . $matches[1];
-            }, $endpointData->uri),
+            'path' => $path,
         ];
 
         $query = [];
