@@ -153,7 +153,7 @@ class PostmanCollectionWriter
         }
 
         $endpointItem = [
-            'name' => $endpoint->uri,
+            'name' => $this->generatePathName($endpoint->uri),
             'request' => [
                 'url' => $this->generateUrlObject($endpoint),
                 'method' => $method,
@@ -272,17 +272,25 @@ class PostmanCollectionWriter
         return $headers;
     }
 
-    protected function generateUrlObject(OutputEndpointData $endpointData): array
-    {
-        $path = $endpointData->uri;
+    protected function generatePathName($uri){
+        $path = $uri;
         if(str_starts_with($path, 'api/{ver}')){
             $path = substr($path, 10);
+            $path = preg_replace_callback('/\{(\w+)\??}/', function ($matches) {
+                return ':' . $matches[1];
+            }, $path);
         }
+        return $path;
+    }
+
+    protected function generateUrlObject(OutputEndpointData $endpointData): array
+    {
+
 
         $base = [
             'host' => '{{baseUrl}}',
             // Change laravel/symfony URL params ({example}) to Postman style, prefixed with a colon
-            'path' => $path,
+            'path' => $this->generatePathName($endpointData->uri),
         ];
 
         $query = [];
