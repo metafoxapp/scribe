@@ -21,6 +21,7 @@ use Knuckles\Scribe\Tools\Utils;
 use Symfony\Component\DomCrawler\Crawler;
 use Symfony\Component\Yaml\Yaml;
 use Knuckles\Scribe\Extracting\Strategies;
+use function Knuckles\Scribe\Config\configureStrategy;
 
 class OutputTest extends BaseLaravelTest
 {
@@ -29,56 +30,6 @@ class OutputTest extends BaseLaravelTest
     protected function setUp(): void
     {
         parent::setUp();
-
-        config(['scribe.strategies' => [
-            'metadata' => [
-                Strategies\Metadata\GetFromDocBlocks::class,
-                Strategies\Metadata\GetFromMetadataAttributes::class,
-            ],
-            'urlParameters' => [
-                Strategies\UrlParameters\GetFromLaravelAPI::class,
-                Strategies\UrlParameters\GetFromLumenAPI::class,
-                Strategies\UrlParameters\GetFromUrlParamAttribute::class,
-                Strategies\UrlParameters\GetFromUrlParamTag::class,
-            ],
-            'queryParameters' => [
-                Strategies\QueryParameters\GetFromFormRequest::class,
-                Strategies\QueryParameters\GetFromInlineValidator::class,
-                Strategies\QueryParameters\GetFromQueryParamAttribute::class,
-                Strategies\QueryParameters\GetFromQueryParamTag::class,
-            ],
-            'headers' => [
-                Strategies\Headers\GetFromRouteRules::class,
-                Strategies\Headers\GetFromHeaderAttribute::class,
-                Strategies\Headers\GetFromHeaderTag::class,
-            ],
-            'bodyParameters' => [
-                Strategies\BodyParameters\GetFromFormRequest::class,
-                Strategies\BodyParameters\GetFromInlineValidator::class,
-                Strategies\BodyParameters\GetFromBodyParamAttribute::class,
-                Strategies\BodyParameters\GetFromBodyParamTag::class,
-            ],
-            'responses' => [
-                Strategies\Responses\UseResponseAttributes::class,
-                Strategies\Responses\UseTransformerTags::class,
-                Strategies\Responses\UseApiResourceTags::class,
-                Strategies\Responses\UseResponseTag::class,
-                Strategies\Responses\UseResponseFileTag::class,
-                Strategies\Responses\ResponseCalls::class,
-            ],
-            'responseFields' => [
-                Strategies\ResponseFields\GetFromResponseFieldAttribute::class,
-                Strategies\ResponseFields\GetFromResponseFieldTag::class,
-            ],
-        ],
-        ]);
-        config(['scribe.database_connections_to_transact' => []]);
-        config(['scribe.routes.0.match.prefixes' => ['api/*']]);
-        // Skip these ones for faster tests
-        config(['scribe.openapi.enabled' => false]);
-        config(['scribe.postman.enabled' => false]);
-        // We want to have the same values for params each time
-        config(['scribe.examples.faker_seed' => 1234]);
 
         $factory = app(\Illuminate\Database\Eloquent\Factory::class);
         $factory->define(TestUser::class, function () {
@@ -97,40 +48,24 @@ class OutputTest extends BaseLaravelTest
         Utils::deleteDirectoryAndContents('.scribe');
     }
 
-    protected function usingLaravelTypeDocs($app)
-    {
-        $app['config']->set('scribe.type', 'laravel');
-        $app['config']->set('scribe.laravel.add_routes', true);
-        $app['config']->set('scribe.laravel.docs_url', '/apidocs');
-    }
-
     /**
      * @test
-     * @define-env usingLaravelTypeDocs
      */
-    public function generates_laravel_type_output()
+    public function generates_static_type_output()
     {
         RouteFacade::post('/api/withQueryParameters', [TestController::class, 'withQueryParameters']);
-        config(['scribe.postman.enabled' => true]);
-        config(['scribe.openapi.enabled' => true]);
+        $this->setConfig(['type' => 'static']);
+        $this->setConfig(['postman.enabled' => true]);
+        $this->setConfig(['openapi.enabled' => true]);
 
-        $this->generateAndExpectConsoleOutput(
-            "Wrote Blade docs to: vendor/orchestra/testbench-core/laravel/resources/views/scribe",
-            "Wrote Laravel assets to: vendor/orchestra/testbench-core/laravel/public/vendor/scribe",
-            "Wrote Postman collection to: vendor/orchestra/testbench-core/laravel/storage/app/scribe/collection.json",
-            "Wrote OpenAPI specification to: vendor/orchestra/testbench-core/laravel/storage/app/scribe/openapi.yaml",
-        );
+        $this->generateAndExpectConsoleOutput(expected: [
+            "Wrote HTML docs and assets to: public/docs/",
+            "Wrote Postman collection to: public/docs/collection.json"
+        ]);
 
         $this->assertFileExists($this->postmanOutputPath(true));
         $this->assertFileExists($this->openapiOutputPath(true));
-        $this->assertFileExists($this->bladeOutputPath());
-
-        $response = $this->get('/apidocs/');
-        $response->assertStatus(200);
-        $response = $this->get('/apidocs.postman');
-        $response->assertStatus(200);
-        $response = $this->get('/apidocs.openapi');
-        $response->assertStatus(200);
+        $this->assertFileExists($this->htmlOutputPath());
 
         unlink($this->postmanOutputPath(true));
         unlink($this->openapiOutputPath(true));
@@ -140,77 +75,127 @@ class OutputTest extends BaseLaravelTest
     /** @test */
     public function supports_multi_docs_in_laravel_type_output()
     {
-        RouteFacade::post('/api/withQueryParameters', [TestController::class, 'withQueryParameters']);
-        config(['scribe_admin' => config('scribe')]);
-        $title = "The Real Admin API";
-        config(['scribe_admin.title' => $title]);
-        config(['scribe_admin.type' => 'laravel']);
-        config(['scribe_admin.postman.enabled' => true]);
-        config(['scribe_admin.openapi.enabled' => true]);
+        $this->generate_with_paths(configName: "scribe_admin");
+    }
 
-        $output = $this->generate(["--config" => "scribe_admin"]);
-        $this->assertStringContainsString(
-            "Wrote Blade docs to: vendor/orchestra/testbench-core/laravel/resources/views/scribe_admin", $output
-        );
-        $this->assertStringContainsString(
-            "Wrote Laravel assets to: vendor/orchestra/testbench-core/laravel/public/vendor/scribe_admin", $output
-        );
-        $this->assertStringContainsString(
-            "Wrote Postman collection to: vendor/orchestra/testbench-core/laravel/storage/app/scribe_admin/collection.json", $output
-        );
-        $this->assertStringContainsString(
-            "Wrote OpenAPI specification to: vendor/orchestra/testbench-core/laravel/storage/app/scribe_admin/openapi.yaml", $output
-        );
+    /** @test */
+    public function supports_custom_scribe_directory()
+    {
+        $this->generate_with_paths(configName: "scribe_admin", intermediateOutputDirectory: '5.5/Apple/26');
+    }
+
+    private function generate_with_paths($configName, $intermediateOutputDirectory = null)
+    {
+        RouteFacade::post('/api/withQueryParameters', [TestController::class, 'withQueryParameters']);
+        config([$configName => config('scribe')]);
+        $title = "The Real Admin API";
+        config(["{$configName}.title" => $title]);
+        config(["{$configName}.type" => 'laravel']);
+        config(["{$configName}.postman.enabled" => true]);
+        config(["{$configName}.openapi.enabled" => true]);
+
+        $pathOptions = ["--config" => $configName];
+        if ($intermediateOutputDirectory) {
+            $pathOptions["--scribe-dir"] = $intermediateOutputDirectory;
+        }
+        $this->generateAndExpectConsoleOutput($pathOptions, [
+            "Wrote Blade docs to: vendor/orchestra/testbench-core/laravel/resources/views/{$configName}",
+            "Wrote Laravel assets to: vendor/orchestra/testbench-core/laravel/public/vendor/{$configName}",
+            "Wrote Postman collection to: vendor/orchestra/testbench-core/laravel/storage/app/{$configName}/collection.json",
+            "Wrote OpenAPI specification to: vendor/orchestra/testbench-core/laravel/storage/app/{$configName}/openapi.yaml",
+        ]);
 
         $paths = collect([
-            Storage::disk('local')->path('scribe_admin/collection.json'),
-            Storage::disk('local')->path('scribe_admin/openapi.yaml'),
-            View::getFinder()->find('scribe_admin/index'),
+            Storage::disk('local')->path("{$configName}/collection.json"),
+            Storage::disk('local')->path("{$configName}/openapi.yaml"),
+            View::getFinder()->find("{$configName}/index"),
         ]);
         $paths->each(fn($path) => $this->assertFileContainsString($path, $title));
         $paths->each(fn($path) => unlink($path));
 
-        $this->assertDirectoryExists(".scribe_admin");
-        Utils::deleteDirectoryAndContents(".scribe_admin");
+        $this->assertDirectoryExists($intermediateOutputDirectory ?: ".{$configName}");
+        Utils::deleteDirectoryAndContents($intermediateOutputDirectory ?: ".{$configName}");
+    }
+
+    /** @test */
+    public function generates_and_adds_routes()
+    {
+        RouteFacade::post('/api/withBodyParameters', [TestController::class, 'withBodyParameters']);
+
+        $this->setConfig([
+            'type' => 'laravel',
+            'laravel.add_routes' => true,
+            'postman.enabled' => true,
+            'openapi.enabled' => true,
+        ]);
+        $this->generate();
+
+        $response = $this->get('/docs');
+        $response->assertStatus(200);
+        $response = $this->get('/docs.postman');
+        $response->assertStatus(200);
+        $response = $this->get('/docs.openapi');
+        $response->assertStatus(200);
     }
 
     /** @test */
     public function generated_postman_collection_file_is_correct()
     {
+        if (phpversion() < 8.3) {
+            // See https://github.com/FakerPHP/Faker/issues/694
+            $this->markTestSkipped('Faker seeding changed in PHP 8.3');
+        }
+
         RouteFacade::post('/api/withBodyParametersAsArray', [TestController::class, 'withBodyParametersAsArray']);
         RouteFacade::post('/api/withFormDataParams', [TestController::class, 'withFormDataParams']);
         RouteFacade::post('/api/withBodyParameters', [TestController::class, 'withBodyParameters']);
         RouteFacade::get('/api/withQueryParameters', [TestController::class, 'withQueryParameters']);
         RouteFacade::get('/api/withAuthTag', [TestController::class, 'withAuthenticatedTag']);
         RouteFacade::get('/api/echoesUrlParameters/{param}/{param2}/{param3?}/{param4?}', [TestController::class, 'echoesUrlParameters']);
-        config(['scribe.title' => 'GREAT API!']);
-        config(['scribe.auth.enabled' => true]);
-        config(['scribe.postman.overrides' => [
-            'info.version' => '3.9.9',
-        ]]);
-        config([
-            'scribe.routes.0.apply.headers' => [
-                'Custom-Header' => 'NotSoCustom',
+        $this->setConfig([
+            'title' => 'GREAT API!',
+            'auth.enabled' => true,
+            'postman.enabled' => true,
+            'postman.overrides' => [
+                'info.version' => '3.9.9',
+            ],
+            'strategies.headers' => [
+                ...config('scribe.strategies.headers'),
+                Strategies\StaticData::withSettings(data: ['Custom-Header' => 'NotSoCustom']),
             ],
         ]);
-        config(['scribe.postman.enabled' => true]);
+        $this->enableResponseCalls();
 
-        $this->generateAndExpectConsoleOutput(
-            "Wrote HTML docs and assets to: public/docs/",
-            "Wrote Postman collection to: public/docs/collection.json"
-        );
+        $this->generateAndExpectConsoleOutput(expected: [
+            "Wrote Blade docs to: vendor/orchestra/testbench-core/laravel/resources/views/scribe",
+            "Wrote Laravel assets to: vendor/orchestra/testbench-core/laravel/public/vendor/scribe",
+            "Wrote Postman collection to: vendor/orchestra/testbench-core/laravel/storage/app/scribe/collection.json",
+        ]);
 
         $generatedCollection = json_decode(file_get_contents($this->postmanOutputPath()), true);
         // The Postman ID varies from call to call; erase it to make the test data reproducible.
         $generatedCollection['info']['_postman_id'] = '';
         $fixtureCollection = json_decode(file_get_contents(__DIR__ . '/../Fixtures/collection.json'), true);
 
+        // Laravel 11 began adding CORS headers by default
+        foreach ($generatedCollection["item"] as &$group) {
+            foreach ($group["item"] as &$endpoint) {
+                foreach ($endpoint["response"] as &$response) {
+                    $response["header"] = array_filter($response["header"], fn ($header) => $header["key"] !== "access-control-allow-origin");
+                }
+            }
+        }
         $this->assertEquals($fixtureCollection, $generatedCollection);
     }
 
     /** @test */
     public function generated_openapi_spec_file_is_correct()
     {
+        if (phpversion() < 8.3) {
+            // See https://github.com/FakerPHP/Faker/issues/694
+            $this->markTestSkipped('Faker seeding changed in PHP 8.3');
+        }
+
         RouteFacade::post('/api/withBodyParametersAsArray', [TestController::class, 'withBodyParametersAsArray']);
         RouteFacade::post('/api/withFormDataParams', [TestController::class, 'withFormDataParams']);
         RouteFacade::get('/api/withResponseTag', [TestController::class, 'withResponseTag']);
@@ -218,41 +203,27 @@ class OutputTest extends BaseLaravelTest
         RouteFacade::get('/api/withAuthTag', [TestController::class, 'withAuthenticatedTag']);
         RouteFacade::get('/api/echoesUrlParameters/{param}/{param2}/{param3?}/{param4?}', [TestController::class, 'echoesUrlParameters']);
 
-        config(['scribe.openapi.enabled' => true]);
-        config(['scribe.openapi.overrides' => [
-            'info.version' => '3.9.9',
-        ]]);
-        config([
-            'scribe.routes.0.apply.headers' => [
-                'Custom-Header' => 'NotSoCustom',
+        $this->setConfig([
+            'openapi.enabled' => true,
+            'openapi.overrides' => [
+                'info.version' => '3.9.9',
+            ],
+            'strategies.headers' =>  [
+                ...config('scribe.strategies.headers'),
+                Strategies\StaticData::withSettings(data: ['Custom-Header' => 'NotSoCustom']),
             ],
         ]);
+        $this->enableResponseCalls();
 
-        $this->generateAndExpectConsoleOutput(
-            "Wrote HTML docs and assets to: public/docs/",
-            "Wrote OpenAPI specification to: public/docs/openapi.yaml"
-        );
+        $this->generateAndExpectConsoleOutput(expected: [
+            "Wrote Blade docs to: vendor/orchestra/testbench-core/laravel/resources/views/scribe",
+            "Wrote Laravel assets to: vendor/orchestra/testbench-core/laravel/public/vendor/scribe",
+            "Wrote OpenAPI specification to: vendor/orchestra/testbench-core/laravel/storage/app/scribe/openapi.yaml",
+        ]);
 
         $generatedSpec = Yaml::parseFile($this->openapiOutputPath());
         $fixtureSpec = Yaml::parseFile(__DIR__ . '/../Fixtures/openapi.yaml');
         $this->assertEquals($fixtureSpec, $generatedSpec);
-    }
-
-    /** @test */
-    public function can_append_custom_http_headers()
-    {
-        RouteFacade::get('/api/headers', [TestController::class, 'checkCustomHeaders']);
-        config([
-            'scribe.routes.0.apply.headers' => [
-                'Authorization' => 'customAuthToken',
-                'Custom-Header' => 'NotSoCustom',
-            ],
-        ]);
-        $this->generate();
-
-        $endpointDetails = Yaml::parseFile('.scribe/endpoints/00.yaml')['endpoints'][0];
-        $this->assertEquals("customAuthToken", $endpointDetails['headers']["Authorization"]);
-        $this->assertEquals("NotSoCustom", $endpointDetails['headers']["Custom-Header"]);
     }
 
     /** @test */
@@ -262,8 +233,7 @@ class OutputTest extends BaseLaravelTest
 
         $this->generate();
 
-        $generatedHtml = file_get_contents($this->htmlOutputPath());
-        $this->assertStringContainsString('Лорем ипсум долор сит амет', $generatedHtml);
+        $this->assertFileContainsString($this->bladeOutputPath(), 'Лорем ипсум долор сит амет');
     }
 
     /** @test */
@@ -276,7 +246,7 @@ class OutputTest extends BaseLaravelTest
 
         $this->generate();
 
-        $crawler = new Crawler(file_get_contents($this->htmlOutputPath()));
+        $crawler = new Crawler(file_get_contents($this->bladeOutputPath()));
         $headings = $crawler->filter('h1')->getIterator();
         $this->assertCount(5, $headings); // intro, auth, three groups
         [$_, $_, $firstGroup, $secondGroup, $thirdGroup] = $headings;
@@ -290,7 +260,7 @@ class OutputTest extends BaseLaravelTest
     /** @test */
     public function sorts_groups_and_endpoints_in_the_specified_order()
     {
-        config(['scribe.groups.order' => [
+        $this->setConfig(['groups.order' => [
             '10. Group 10',
             '1. Group 1' => [
                 'GET /api/action1b',
@@ -318,7 +288,7 @@ class OutputTest extends BaseLaravelTest
 
         $this->generate();
 
-        $crawler = new Crawler(file_get_contents($this->htmlOutputPath()));
+        $crawler = new Crawler(file_get_contents($this->bladeOutputPath()));
         $headings = $crawler->filter('h1')->getIterator();
         $this->assertCount(6, $headings); // intro, auth, four groups
         [$_, $_, $firstGroup, $secondGroup, $thirdGroup, $fourthGroup] = $headings;
@@ -328,16 +298,16 @@ class OutputTest extends BaseLaravelTest
         $this->assertEquals('13. Group 13', $thirdGroup->textContent);
         $this->assertEquals('2. Group 2', $fourthGroup->textContent);
 
-        $firstGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="'.Str::slug($firstGroup->textContent).'"]');
+        $firstGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="' . Str::slug($firstGroup->textContent) . '"]');
         $this->assertEquals(1, $firstGroupEndpointsAndSubgroups->count());
         $this->assertEquals("GET api/action10", $firstGroupEndpointsAndSubgroups->getNode(0)->textContent);
 
-        $secondGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="'.Str::slug($secondGroup->textContent).'"]');
+        $secondGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="' . Str::slug($secondGroup->textContent) . '"]');
         $this->assertEquals(2, $secondGroupEndpointsAndSubgroups->count());
         $this->assertEquals("GET api/action1b", $secondGroupEndpointsAndSubgroups->getNode(0)->textContent);
         $this->assertEquals("GET api/action1", $secondGroupEndpointsAndSubgroups->getNode(1)->textContent);
 
-        $thirdGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="'.Str::slug($thirdGroup->textContent).'"]');
+        $thirdGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="' . Str::slug($thirdGroup->textContent) . '"]');
         $this->assertEquals(8, $thirdGroupEndpointsAndSubgroups->count());
         $this->assertEquals("SG B", $thirdGroupEndpointsAndSubgroups->getNode(0)->textContent);
         $this->assertEquals("POST api/action13d", $thirdGroupEndpointsAndSubgroups->getNode(1)->textContent);
@@ -350,24 +320,84 @@ class OutputTest extends BaseLaravelTest
     }
 
     /** @test */
+    public function sorts_groups_and_endpoints_in_the_specified_order_with_wildcard()
+    {
+        $this->setConfig(['groups.order' => [
+            '10. Group 10',
+            '*',
+            '13. Group 13' => [
+                'SG B' => [
+                    'POST /api/action13d',
+                    'GET /api/action13a',
+                ],
+                'SG A',
+                'PUT /api/action13c',
+            ],
+        ]]);
+
+        RouteFacade::get('/api/action1', [TestGroupController::class, 'action1']);
+        RouteFacade::get('/api/action1b', [TestGroupController::class, 'action1b']);
+        RouteFacade::get('/api/action2', [TestGroupController::class, 'action2']);
+        RouteFacade::get('/api/action10', [TestGroupController::class, 'action10']);
+        RouteFacade::get('/api/action13a', [TestGroupController::class, 'action13a']);
+        RouteFacade::post('/api/action13b', [TestGroupController::class, 'action13b']);
+        RouteFacade::put('/api/action13c', [TestGroupController::class, 'action13c']);
+        RouteFacade::post('/api/action13d', [TestGroupController::class, 'action13d']);
+        RouteFacade::get('/api/action13e', [TestGroupController::class, 'action13e']);
+
+        $this->generate();
+
+        $crawler = new Crawler(file_get_contents($this->bladeOutputPath()));
+        $headings = $crawler->filter('h1')->getIterator();
+        $this->assertCount(6, $headings); // intro, auth, four groups
+        [$_, $_, $firstGroup, $secondGroup, $thirdGroup, $fourthGroup] = $headings;
+
+        $this->assertEquals('10. Group 10', $firstGroup->textContent);
+        $this->assertEquals('1. Group 1', $secondGroup->textContent);
+        $this->assertEquals('2. Group 2', $thirdGroup->textContent);
+        $this->assertEquals('13. Group 13', $fourthGroup->textContent);
+
+        $firstGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="' . Str::slug($firstGroup->textContent) . '"]');
+        $this->assertEquals(1, $firstGroupEndpointsAndSubgroups->count());
+        $this->assertEquals("GET api/action10", $firstGroupEndpointsAndSubgroups->getNode(0)->textContent);
+
+        $secondGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="' . Str::slug($secondGroup->textContent) . '"]');
+        $this->assertEquals(2, $secondGroupEndpointsAndSubgroups->count());
+        $this->assertEquals("GET api/action1", $secondGroupEndpointsAndSubgroups->getNode(0)->textContent);
+        $this->assertEquals("GET api/action1b", $secondGroupEndpointsAndSubgroups->getNode(1)->textContent);
+
+        $fourthGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="' . Str::slug($fourthGroup->textContent) . '"]');
+        $this->assertEquals(8, $fourthGroupEndpointsAndSubgroups->count());
+        $this->assertEquals("SG B", $fourthGroupEndpointsAndSubgroups->getNode(0)->textContent);
+        $this->assertEquals("POST api/action13d", $fourthGroupEndpointsAndSubgroups->getNode(1)->textContent);
+        $this->assertEquals("GET api/action13a", $fourthGroupEndpointsAndSubgroups->getNode(2)->textContent);
+        $this->assertEquals("SG A", $fourthGroupEndpointsAndSubgroups->getNode(3)->textContent);
+        $this->assertEquals("GET api/action13e", $fourthGroupEndpointsAndSubgroups->getNode(4)->textContent);
+        $this->assertEquals("PUT api/action13c", $fourthGroupEndpointsAndSubgroups->getNode(5)->textContent);
+        $this->assertEquals("SG C", $fourthGroupEndpointsAndSubgroups->getNode(6)->textContent);
+        $this->assertEquals("POST api/action13b", $fourthGroupEndpointsAndSubgroups->getNode(7)->textContent);
+    }
+
+    /** @test */
     public function merges_and_correctly_sorts_user_defined_endpoints()
     {
         RouteFacade::get('/api/action1', [TestGroupController::class, 'action1']);
         RouteFacade::get('/api/action2', [TestGroupController::class, 'action2']);
-        config(['scribe.routes.0.apply.response_calls.methods' => []]);
-        config(['scribe.groups.order' => [
-            '1. Group 1',
-            '5. Group 5',
-            '4. Group 4',
-            '2. Group 2',
-        ]]);
+        $this->setConfig([
+            'groups.order' => [
+                '1. Group 1',
+                '5. Group 5',
+                '4. Group 4',
+                '2. Group 2',
+            ]
+        ]);
 
         if (!is_dir('.scribe/endpoints')) mkdir('.scribe/endpoints', 0777, true);
         copy(__DIR__ . '/../Fixtures/custom.0.yaml', '.scribe/endpoints/custom.0.yaml');
 
         $this->generate();
 
-        $crawler = new Crawler(file_get_contents($this->htmlOutputPath()));
+        $crawler = new Crawler(file_get_contents($this->bladeOutputPath()));
         $headings = $crawler->filter('h1')->getIterator();
         $this->assertCount(6, $headings); // intro, auth, four groups
         [$_, $_, $firstGroup, $secondGroup, $thirdGroup, $fourthGroup] = $headings;
@@ -377,21 +407,21 @@ class OutputTest extends BaseLaravelTest
         $this->assertEquals('4. Group 4', $thirdGroup->textContent);
         $this->assertEquals('2. Group 2', $fourthGroup->textContent);
 
-        $firstGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="'.Str::slug($firstGroup->textContent).'"]');
+        $firstGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="' . Str::slug($firstGroup->textContent) . '"]');
         $this->assertEquals(2, $firstGroupEndpointsAndSubgroups->count());
         $this->assertEquals("GET api/action1", $firstGroupEndpointsAndSubgroups->getNode(0)->textContent);
         $this->assertEquals("User defined", $firstGroupEndpointsAndSubgroups->getNode(1)->textContent);
 
-        $secondGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="'.Str::slug($secondGroup->textContent).'"]');
+        $secondGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="' . Str::slug($secondGroup->textContent) . '"]');
         $this->assertEquals(2, $secondGroupEndpointsAndSubgroups->count());
         $this->assertEquals("GET group5", $secondGroupEndpointsAndSubgroups->getNode(0)->textContent);
         $this->assertEquals("GET alsoGroup5", $secondGroupEndpointsAndSubgroups->getNode(1)->textContent);
 
-        $thirdGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="'.Str::slug($thirdGroup->textContent).'"]');
+        $thirdGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="' . Str::slug($thirdGroup->textContent) . '"]');
         $this->assertEquals(1, $thirdGroupEndpointsAndSubgroups->count());
         $this->assertEquals("GET group4", $thirdGroupEndpointsAndSubgroups->getNode(0)->textContent);
 
-        $fourthGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="'.Str::slug($fourthGroup->textContent).'"]');
+        $fourthGroupEndpointsAndSubgroups = $crawler->filter('h2[id^="' . Str::slug($fourthGroup->textContent) . '"]');
         $this->assertEquals(1, $fourthGroupEndpointsAndSubgroups->count());
         $this->assertEquals("GET api/action2", $fourthGroupEndpointsAndSubgroups->getNode(0)->textContent);
     }
@@ -401,7 +431,6 @@ class OutputTest extends BaseLaravelTest
     {
         RouteFacade::get('/api/action1', [TestGroupController::class, 'action1']);
         RouteFacade::get('/api/action1b', [TestGroupController::class, 'action1b']);
-        config(['scribe.routes.0.apply.response_calls.methods' => []]);
 
         $this->generate();
 
@@ -417,7 +446,10 @@ class OutputTest extends BaseLaravelTest
             'required' => true,
             'example' => 6,
             'type' => 'integer',
+            'enumValues' => [],
             'custom' => [],
+            'exampleWasSpecified' => false,
+            'nullable' => false,
         ];
         $group['endpoints'][0]['urlParameters']['a_param'] = $extraParam;
         file_put_contents($firstGroupFilePath, Yaml::dump(
@@ -431,14 +463,14 @@ class OutputTest extends BaseLaravelTest
         $group = Yaml::parseFile($firstGroupFilePath);
         $this->assertEquals('api/action1', $group['endpoints'][0]['uri']);
         $this->assertEquals(['a_param' => $extraParam], $group['endpoints'][0]['urlParameters']);
-        $this->assertStringContainsString('Some other useful stuff.', file_get_contents($authFilePath));
+        $this->assertFileContainsString($authFilePath, 'Some other useful stuff.');
 
         $this->generate(['--force' => true]);
 
         $group = Yaml::parseFile($firstGroupFilePath);
         $this->assertEquals('api/action1', $group['endpoints'][0]['uri']);
         $this->assertEquals([], $group['endpoints'][0]['urlParameters']);
-        $this->assertStringNotContainsString('Some other useful stuff.', file_get_contents($authFilePath));
+        $this->assertFileNotContainsString($authFilePath, 'Some other useful stuff.');
     }
 
     /** @test */
@@ -449,8 +481,6 @@ class OutputTest extends BaseLaravelTest
                 'addresses' => 'address:uuid',
             ]);
         });
-        config(['scribe.routes.0.match.prefixes' => ['*']]);
-        config(['scribe.routes.0.apply.response_calls.methods' => []]);
 
         $this->generate();
 
@@ -466,9 +496,6 @@ class OutputTest extends BaseLaravelTest
         RouteFacade::resource('posts', TestPostController::class)->only('update');
         RouteFacade::resource('posts.users', TestPostUserController::class)->only('update');
 
-        config(['scribe.routes.0.match.prefixes' => ['*']]);
-        config(['scribe.routes.0.apply.response_calls.methods' => []]);
-
         $this->generate();
 
         $group = Yaml::parseFile('.scribe/endpoints/00.yaml');
@@ -483,9 +510,6 @@ class OutputTest extends BaseLaravelTest
 
         RouteFacade::resource('posts', TestPostBoundInterfaceController::class)->only('update');
 
-        config(['scribe.routes.0.match.prefixes' => ['*']]);
-        config(['scribe.routes.0.apply.response_calls.methods' => []]);
-
         $this->generate();
 
         $group = Yaml::parseFile('.scribe/endpoints/00.yaml');
@@ -495,11 +519,7 @@ class OutputTest extends BaseLaravelTest
     /** @test */
     public function generates_correct_url_params_from_non_resource_routes_and_model_binding()
     {
-        RouteFacade::get('posts/{post}/users', function (TestPost $post) {
-        });
-
-        config(['scribe.routes.0.match.prefixes' => ['*']]);
-        config(['scribe.routes.0.apply.response_calls.methods' => []]);
+        RouteFacade::get('posts/{post}/users', fn (TestPost $post) => null);
 
         $this->generate();
 
@@ -510,14 +530,12 @@ class OutputTest extends BaseLaravelTest
     /** @test */
     public function generates_from_camel_dir_if_noExtraction_flag_is_set()
     {
-        config(['scribe.routes.0.exclude' => ['*']]);
+        $this->setConfig(['routes.0.exclude' => ['*']]);
         Utils::copyDirectory(__DIR__ . '/../Fixtures/.scribe', '.scribe');
 
-        $output = $this->generate(['--no-extraction' => true]);
+        $this->generateAndExpectConsoleOutput(['--no-extraction' => true], notExpected: ["Processing route"]);
 
-        $this->assertStringNotContainsString("Processing route", $output);
-
-        $crawler = new Crawler(file_get_contents($this->htmlOutputPath()));
+        $crawler = new Crawler(file_get_contents($this->bladeOutputPath()));
         [$intro, $auth] = $crawler->filter('h1 + p')->getIterator();
         $this->assertEquals('Heyaa introduction!👋', trim($intro->firstChild->textContent));
         $this->assertEquals('This is just a test.', trim($auth->firstChild->textContent));
@@ -545,8 +563,6 @@ class OutputTest extends BaseLaravelTest
          * @bodyParam data.a_file file
          */
         RouteFacade::post('nested-file', fn() => null);
-        config(['scribe.routes.0.match.prefixes' => ['*']]);
-        config(['scribe.routes.0.apply.response_calls.methods' => []]);
 
         $this->generate();
 
@@ -560,16 +576,16 @@ class OutputTest extends BaseLaravelTest
 
     }
 
-    protected function postmanOutputPath(bool $laravelType = false): string
+    protected function postmanOutputPath(bool $staticType = false): string
     {
-        return $laravelType
-            ? Storage::disk('local')->path('scribe/collection.json') : 'public/docs/collection.json';
+        return $staticType
+            ? 'public/docs/collection.json' : Storage::disk('local')->path('scribe/collection.json');
     }
 
-    protected function openapiOutputPath(bool $laravelType = false): string
+    protected function openapiOutputPath(bool $staticType = false): string
     {
-        return $laravelType
-            ? Storage::disk('local')->path('scribe/openapi.yaml') : 'public/docs/openapi.yaml';
+        return $staticType
+            ? 'public/docs/openapi.yaml' : Storage::disk('local')->path('scribe/openapi.yaml');
     }
 
     protected function htmlOutputPath(): string
@@ -580,5 +596,15 @@ class OutputTest extends BaseLaravelTest
     protected function bladeOutputPath(): string
     {
         return View::getFinder()->find('scribe/index');
+    }
+
+    protected function enableResponseCalls(): void
+    {
+        $this->setConfig([
+            'strategies.responses' => configureStrategy(
+                config('scribe.strategies.responses'),
+                Strategies\Responses\ResponseCalls::withSettings(only: ['GET *'], except: [])
+            )
+        ]);
     }
 }

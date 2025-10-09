@@ -9,12 +9,15 @@ use FastRoute\RouteParser\Std;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Routing\Route;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 use Knuckles\Scribe\Exceptions\CouldntFindFactory;
 use Knuckles\Scribe\Exceptions\CouldntGetRouteDetails;
 use Knuckles\Scribe\ScribeServiceProvider;
 use Knuckles\Scribe\Tools\ConsoleOutputUtils as c;
+use League\Flysystem\DirectoryListing;
 use League\Flysystem\Filesystem;
+use League\Flysystem\FilesystemException;
 use League\Flysystem\Local\LocalFilesystemAdapter;
 use Mpociot\Reflection\DocBlock\Tag;
 use ReflectionClass;
@@ -64,25 +67,6 @@ class Utils
     {
         if (empty($urlParameters)) {
             return $uri;
-        }
-
-        if (self::isLumen()) {
-            $boundUri = '';
-            $possibilities = (new Std)->parse($uri);
-            // See https://github.com/nikic/FastRoute#overriding-the-route-parser-and-dispatcher
-            $possibilityWithAllSegmentsPresent = end($possibilities);
-            foreach ($possibilityWithAllSegmentsPresent as $part) {
-                if (!is_array($part)) {
-                    // It's just a path segment, not a URL parameter'
-                    $boundUri .= $part;
-                    continue;
-                }
-
-                $name = $part[0];
-                $boundUri .= $urlParameters[$name];
-            }
-
-            return $boundUri;
         }
 
         foreach ($urlParameters as $parameterName => $example) {
@@ -136,36 +120,23 @@ class Utils
 
     public static function deleteDirectoryAndContents(string $dir, ?string $workingDir = null): void
     {
-        if (class_exists(LocalFilesystemAdapter::class)) {
-            // Flysystem 2+
-            $workingDir ??= getcwd();
-            $adapter = new LocalFilesystemAdapter($workingDir);
-            $fs = new Filesystem($adapter);
-            $dir = str_replace($workingDir, '', $dir);
-            $fs->deleteDirectory($dir);
-        } else {
-            // v1
-            $adapter = new \League\Flysystem\Adapter\Local($workingDir ?: getcwd());
-            $fs = new Filesystem($adapter);
-            $dir = str_replace($adapter->getPathPrefix(), '', $dir);
-            $fs->deleteDir($dir);
-        }
+        $workingDir ??= getcwd();
+        $adapter = new LocalFilesystemAdapter($workingDir);
+        $fs = new Filesystem($adapter);
+        $dir = str_replace($workingDir, '', $dir);
+        $fs->deleteDirectory($dir);
     }
 
+    /**
+     * @param string $dir
+     * @return DirectoryListing<\League\Flysystem\StorageAttributes>
+     * @throws FilesystemException
+     */
     public static function listDirectoryContents(string $dir)
     {
-        if (class_exists(LocalFilesystemAdapter::class)) {
-            // Flysystem 2+
-            $adapter = new LocalFilesystemAdapter(getcwd());
-            $fs = new Filesystem($adapter);
-            return $fs->listContents($dir);
-        } else {
-            // v1
-            $adapter = new \League\Flysystem\Adapter\Local(getcwd()); // @phpstan-ignore-line
-            $fs = new Filesystem($adapter); // @phpstan-ignore-line
-            $dir = str_replace($adapter->getPathPrefix(), '', $dir); // @phpstan-ignore-line
-            return $fs->listContents($dir);
-        }
+        $adapter = new LocalFilesystemAdapter(getcwd());
+        $fs = new Filesystem($adapter);
+        return $fs->listContents($dir);
     }
 
     public static function copyDirectory(string $src, string $dest): void
@@ -189,6 +160,11 @@ class Utils
                 self::copyDirectory($f->getRealPath(), "$dest/$f");
             }
         }
+    }
+
+    public static function makeDirectoryRecursive(string $dir): void
+    {
+        File::isDirectory($dir) || File::makeDirectory($dir, 0777, true, true);
     }
 
     public static function deleteFilesMatching(string $dir, callable $condition): void
@@ -324,20 +300,6 @@ class Utils
         return $factory;
     }
 
-    public static function isLumen(): bool
-    {
-        // See https://github.com/laravel/lumen-framework/blob/99330e6ca2198e228f5894cf84d843c2a539a250/src/Application.php#L163
-        $app = app();
-        if ($app
-            && is_callable([$app, 'version'])
-            && Str::startsWith($app->version(), 'Lumen')
-        ) {
-            return true;
-        }
-
-        return false;
-    }
-
     /**
      * Filter a list of docblock tags to those matching the specified ones (case-insensitive).
      *
@@ -364,11 +326,12 @@ class Utils
     {
         // We only load our custom translation layer if we really need it
         if (!ScribeServiceProvider::$customTranslationLayerLoaded) {
-            (new ScribeServiceProvider(app()))->loadCustomTranslationLayer();
+            app(ScribeServiceProvider::class, ['app' => app()])->loadCustomTranslationLayer();
         }
 
         $translation = trans($key, $replace);
 
+        /* @phpstan-ignore-next-line */
         if ($translation === $key || $translation === null) {
             $translation = trans($key, $replace, 'en');
         }

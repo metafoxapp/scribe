@@ -38,11 +38,11 @@ class UseResponseAttributes extends PhpAttributeStrategy
         $responses = [];
         foreach ([...$attributesOnController, ...$attributesOnFormRequest, ...$attributesOnMethod] as $attributeInstance) {
             /* @phpstan-ignore-next-line */
-            $responses[] = match (get_class($attributeInstance)) {
-                Response::class => $attributeInstance->toArray(),
-                ResponseFromFile::class => $attributeInstance->toArray(),
-                ResponseFromApiResource::class => $this->getApiResourceResponse($attributeInstance),
-                ResponseFromTransformer::class => $this->getTransformerResponse($attributeInstance),
+            $responses[] = match (true) {
+                $attributeInstance instanceof Response => $attributeInstance->toArray(),
+                $attributeInstance instanceof ResponseFromFile => $attributeInstance->toArray(),
+                $attributeInstance instanceof ResponseFromApiResource => $this->getApiResourceResponse($attributeInstance),
+                $attributeInstance instanceof ResponseFromTransformer => $this->getTransformerResponse($attributeInstance),
             };
         }
 
@@ -60,7 +60,7 @@ class UseResponseAttributes extends PhpAttributeStrategy
             );
             $modelInstantiator = null;
         } else {
-            $modelInstantiator = fn() => $this->instantiateExampleModel($modelToBeTransformed, $attributeInstance->factoryStates, $attributeInstance->with);
+            $modelInstantiator = fn() => $this->instantiateExampleModel($modelToBeTransformed, $attributeInstance->factoryStates, $attributeInstance->with, null, $attributeInstance->withCount);
         }
 
         $pagination = [];
@@ -68,6 +68,8 @@ class UseResponseAttributes extends PhpAttributeStrategy
             $pagination = [$attributeInstance->paginate];
         } else if ($attributeInstance->simplePaginate) {
             $pagination = [$attributeInstance->simplePaginate, 'simple'];
+        } else if ($attributeInstance->cursorPaginate) {
+            $pagination = [$attributeInstance->cursorPaginate, 'cursor'];
         }
 
 

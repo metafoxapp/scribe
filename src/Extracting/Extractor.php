@@ -14,8 +14,10 @@ use Illuminate\Support\Str;
 use Knuckles\Camel\Extraction\ResponseCollection;
 use Knuckles\Camel\Extraction\ResponseField;
 use Knuckles\Camel\Output\OutputEndpointData;
-use Knuckles\Scribe\Extracting\Strategies\Strategy;
+use Knuckles\Scribe\Extracting\Strategies\StaticData;
+use Knuckles\Scribe\Tools\ConsoleOutputUtils as c;
 use Knuckles\Scribe\Tools\DocumentationConfig;
+use Knuckles\Scribe\Tools\RoutePatternMatcher;
 
 class Extractor
 {
@@ -25,7 +27,7 @@ class Extractor
 
     private static ?Route $routeBeingProcessed = null;
 
-    public function __construct(DocumentationConfig $config = null)
+    public function __construct(?DocumentationConfig $config = null)
     {
         // If no config is injected, pull from global
         $this->config = $config ?: new DocumentationConfig(config('scribe'));
@@ -41,7 +43,7 @@ class Extractor
 
     /**
      * @param Route $route
-     * @param array $routeRules Rules to apply when generating documentation for this route
+     * @param array $routeRules Rules to apply when generating documentation for this route. Deprecated. Use strategy config instead.
      *
      * @return ExtractedEndpointData
      *
@@ -195,22 +197,61 @@ class Extractor
      *
      * @param string $stage
      * @param ExtractedEndpointData $endpointData
-     * @param array $rulesToApply
+     * @param array $rulesToApply Deprecated. Use strategy config instead.
      * @param callable $handler Function to run after each strategy returns its results (an array).
      *
      */
-    protected function iterateThroughStrategies(string $stage, ExtractedEndpointData $endpointData, array $rulesToApply, callable $handler): void
+    protected function iterateThroughStrategies(
+        string $stage, ExtractedEndpointData $endpointData, array $rulesToApply, callable $handler
+    ): void
     {
         $strategies = $this->config->get("strategies.$stage", []);
 
-        foreach ($strategies as $strategyClass) {
-            /** @var Strategy $strategy */
+        foreach ($strategies as $strategyClassOrTuple) {
+            if (is_array($strategyClassOrTuple)) {
+                [$strategyClass, &$settings] = $strategyClassOrTuple;
+                if ($strategyClass == 'override') {
+                    c::warn("The 'override' strategy was renamed to 'static_data', and will stop working in the future. Please replace 'override' in your config file with 'static_data'.");
+                    $strategyClass = 'static_data';
+                }
+                if ($strategyClass == 'static_data') {
+                    $strategyClass = StaticData::class;
+                    // Static data can be short: ['static_data', ['key' => 'value']],
+                    // or extended ['static_data', ['data' => ['key' => 'value'], 'only' => ['GET *'], 'except' => []]],
+                    $settingsFormat = array_key_exists('data', $settings) ? 'extended' : 'short';
+                    $settings = match($settingsFormat) {
+                        'extended' => $settings,
+                        'short' => ['data' => $settings],
+                    };
+                }
+            } else {
+                $strategyClass = $strategyClassOrTuple;
+                $settings = [];
+            }
+
+            $routesToExclude = Arr::wrap($settings["except"] ?? []);
+            $routesToInclude = Arr::wrap($settings["only"] ?? []);
+
+            if ($this->shouldSkipRoute($endpointData->route, $routesToExclude, $routesToInclude)) {
+                continue;
+            }
+
             $strategy = new $strategyClass($this->config);
-            $results = $strategy($endpointData, $rulesToApply);
+            $results = $strategy($endpointData, $settings);
             if (is_array($results)) {
                 $handler($results);
             }
         }
+    }
+
+    public function shouldSkipRoute($route, array $routesToExclude, array $routesToInclude): bool
+    {
+        if (!empty($routesToExclude) && RoutePatternMatcher::matches($route, $routesToExclude)) {
+            return true;
+        } elseif (!empty($routesToInclude) && !RoutePatternMatcher::matches($route, $routesToInclude)) {
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -238,9 +279,12 @@ class Extractor
          * @var Parameter $details
          */
         foreach ($parameters as $paramName => $details) {
-            // Remove params which have no examples and are optional.
-            if (is_null($details->example) && $details->required === false) {
-                continue;
+
+            // Remove params which have no intentional examples and are optional.
+            if (!$details->exampleWasSpecified) {
+                if (is_null($details->example) && $details->required === false) {
+                    continue;
+                }
             }
 
             if ($details->type === 'file') {
@@ -399,133 +443,6 @@ class Extractor
         return new File($fileName, fopen($filePath, 'r'));
     }
 
-    /**
-     * Transform body parameters such that object fields have a `fields` property containing a list of all subfields
-     * Subfields will be removed from the main parameter map
-     * For instance, if $parameters is [
-     *   'dad' => new Parameter(...),
-     *   'dad.age' => new Parameter(...),
-     *   'dad.cars[]' => new Parameter(...),
-     *   'dad.cars[].model' => new Parameter(...),
-     *   'dad.cars[].price' => new Parameter(...),
-     * ],
-     * normalise this into [
-     *   'dad' => [
-     *     ...,
-     *     '__fields' => [
-     *       'dad.age' => [...],
-     *       'dad.cars' => [
-     *         ...,
-     *         '__fields' => [
-     *           'model' => [...],
-     *           'price' => [...],
-     *         ],
-     *       ],
-     *   ],
-     * ]]
-     *
-     * @param array $parameters
-     *
-     * @return array
-     */
-    public static function nestArrayAndObjectFields(array $parameters, array $cleanParameters = []): array
-    {
-        // First, we'll make sure all object fields have parent fields properly set
-        $normalisedParameters = [];
-        foreach ($parameters as $name => $parameter) {
-            if (Str::contains($name, '.')) {
-                // If the user didn't add a parent field, we'll helpfully add it for them
-                $ancestors = [];
-
-                $parts = explode('.', $name);
-                $fieldName = array_pop($parts);
-                $parentName = rtrim(join('.', $parts), '[]');
-
-                // When the body is an array, param names will be "[].paramname",
-                // so $parentName is empty. Let's fix that.
-                if (empty($parentName)) {
-                    $parentName = '[]';
-                }
-
-                while ($parentName) {
-                    if (!empty($normalisedParameters[$parentName])) {
-                        break;
-                    }
-
-                    $details = [
-                        "name" => $parentName,
-                        "type" => $parentName === '[]' ? "object[]" : "object",
-                        "description" => "",
-                        "required" => false,
-                    ];
-
-                    if ($parameter instanceof ResponseField) {
-                        $ancestors[] = [$parentName, new ResponseField($details)];
-                    } else {
-                        $lastParentExample = $details["example"] =
-                            [$fieldName => $lastParentExample ?? $parameter->example];
-                        $ancestors[] = [$parentName, new Parameter($details)];
-                    }
-
-                    $fieldName = array_pop($parts);
-                    $parentName = rtrim(join('.', $parts), '[]');
-                }
-
-                // We add ancestors in reverse so we can iterate over parents first in the next section
-                foreach (array_reverse($ancestors) as [$ancestorName, $ancestor]) {
-                    $normalisedParameters[$ancestorName] = $ancestor;
-                }
-            }
-
-            $normalisedParameters[$name] = $parameter;
-            unset($lastParentExample);
-        }
-
-        $finalParameters = [];
-        foreach ($normalisedParameters as $name => $parameter) {
-            $parameter = $parameter->toArray();
-            if (Str::contains($name, '.')) { // An object field
-                // Get the various pieces of the name
-                $parts = explode('.', $name);
-                $fieldName = array_pop($parts);
-                $baseName = join('.__fields.', $parts);
-
-                // For subfields, the type is indicated in the source object
-                // eg test.items[].more and test.items.more would both have parent field with name `items` and containing __fields => more
-                // The difference would be in the parent field's `type` property (object[] vs object)
-                // So we can get rid of all [] to get the parent name
-                $dotPathToParent = str_replace('[]', '', $baseName);
-                // When the body is an array, param names will be  "[].paramname",
-                // so $parts is ['[]']
-                if ($parts[0] == '[]') {
-                    $dotPathToParent = '[]' . $dotPathToParent;
-                }
-
-                $dotPath = $dotPathToParent . '.__fields.' . $fieldName;
-                Arr::set($finalParameters, $dotPath, $parameter);
-            } else { // A regular field, not a subfield of anything
-                // Note: we're assuming any subfields of this field are listed *after* it,
-                // and will set __fields correctly when we iterate over them
-                // Hence why we create a new "normalisedParameters" array above and push the parent to that first
-                $parameter['__fields'] = [];
-                $finalParameters[$name] = $parameter;
-            }
-
-        }
-
-        // Finally, if the body is an array, remove any other items.
-        if (isset($finalParameters['[]'])) {
-            $finalParameters = ["[]" => $finalParameters['[]']];
-            // At this point, the examples are likely [[], []],
-            // but have been correctly set in clean parameters, so let's update them
-            if ($finalParameters["[]"]["example"][0] == [] && !empty($cleanParameters)) {
-                $finalParameters["[]"]["example"] = $cleanParameters;
-            }
-        }
-
-        return $finalParameters;
-    }
-
     protected function mergeInheritedMethodsData(string $stage, ExtractedEndpointData $endpointData, array $inheritedDocsOverrides = []): void
     {
         $overrides = $inheritedDocsOverrides[$stage] ?? [];
@@ -559,5 +476,33 @@ class Extractor
                 default => $results,
             };
         }
+    }
+
+    public static function transformOldRouteRulesIntoNewSettings($stage, $rulesToApply, $strategyName, $strategySettings = [])
+    {
+        if ($stage == 'responses' && Str::is('*ResponseCalls*', $strategyName) &&!empty($rulesToApply['response_calls'])) {
+            // Transform `methods` to `only`
+            $strategySettings = [];
+
+            if (isset($rulesToApply['response_calls']['methods'])) {
+                if(empty($rulesToApply['response_calls']['methods'])) {
+                    // This means all routes are forbidden
+                    $strategySettings['except'] = ["*"];
+                } else {
+                    $strategySettings['only'] = array_map(
+                        fn($method) => "$method *",
+                        $rulesToApply['response_calls']['methods']
+                    );
+                }
+            }
+
+            // Copy all other keys over as is
+            foreach (array_keys($rulesToApply['response_calls']) as $key) {
+                if ($key == 'methods') continue;
+                $strategySettings[$key] = $rulesToApply['response_calls'][$key];
+            }
+        }
+
+        return $strategySettings;
     }
 }

@@ -5,6 +5,8 @@ namespace Knuckles\Scribe\Extracting;
 use Exception;
 use PhpParser\Node;
 use PhpParser\NodeFinder;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor\NameResolver;
 use PhpParser\ParserFactory;
 use ReflectionFunctionAbstract;
 use Throwable;
@@ -43,11 +45,18 @@ class MethodAstParser
      */
     protected static function parseClassSourceCode(string $sourceCode): ?array
     {
-        $parser = (new ParserFactory)->create(ParserFactory::PREFER_PHP7);
+        $parser = (new ParserFactory)->createForHostVersion();
         try {
             $ast = $parser->parse($sourceCode);
         } catch (Throwable $error) {
             throw new Exception("Parse error: {$error->getMessage()}");
+        }
+
+        $traverser = new NodeTraverser(new NameResolver(options: ['replaceNodes' => false]));
+        try {
+            $traverser->traverse($ast);
+        } catch (Throwable $error) {
+            throw new Exception("Traverse error: {$error->getMessage()}");
         }
 
         return $ast;

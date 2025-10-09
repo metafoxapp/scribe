@@ -3,14 +3,13 @@
 namespace Knuckles\Scribe;
 
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Str;
 use Knuckles\Scribe\Commands\DiffConfig;
 use Knuckles\Scribe\Commands\GenerateDocumentation;
 use Knuckles\Scribe\Commands\MakeStrategy;
-use Knuckles\Scribe\Commands\Upgrade;
 use Knuckles\Scribe\Matching\RouteMatcher;
 use Knuckles\Scribe\Matching\RouteMatcherInterface;
 use Knuckles\Scribe\Tools\BladeMarkdownEngine;
-use Knuckles\Scribe\Tools\Utils;
 use Knuckles\Scribe\Writing\CustomTranslationsLoader;
 
 class ScribeServiceProvider extends ServiceProvider
@@ -33,7 +32,7 @@ class ScribeServiceProvider extends ServiceProvider
         $this->app->bind(RouteMatcherInterface::class, config('scribe.routeMatcher', RouteMatcher::class));
 
         if (!class_exists('Str')) {
-            // Lumen may not have the aliases set up, and we don't want to have to use the FQN in our blade files.
+            // We don't want to have to use the FQN in our blade files.
             class_alias(\Illuminate\Support\Str::class, 'Str');
         }
     }
@@ -43,11 +42,9 @@ class ScribeServiceProvider extends ServiceProvider
      */
     protected function bootRoutes()
     {
-        if (
-            config('scribe.type', 'static') === 'laravel' &&
-            config('scribe.laravel.add_routes', false)
-        ) {
-            $routesPath = Utils::isLumen() ? __DIR__ . '/../routes/lumen.php' : __DIR__ . '/../routes/laravel.php';
+        $docsType = config('scribe.type', 'laravel');
+        if (Str::endsWith($docsType, 'laravel') && config('scribe.laravel.add_routes', true)) {
+            $routesPath = __DIR__ . '/../routes/laravel.php';
             $this->loadRoutesFrom($routesPath);
         }
     }
@@ -55,7 +52,7 @@ class ScribeServiceProvider extends ServiceProvider
     protected function configureTranslations(): void
     {
         $this->publishes([
-            __DIR__.'/../lang/' => $this->app->langPath(),
+            __DIR__ . '/../lang/' => $this->app->langPath(),
         ], 'scribe-translations');
 
         $this->loadTranslationsFrom($this->app->langPath('scribe.php'), 'scribe');
@@ -77,6 +74,7 @@ class ScribeServiceProvider extends ServiceProvider
             'examples' => 'partials/example-requests',
             'themes' => 'themes',
             'markdown' => 'markdown',
+            'external' => 'external',
         ];
         foreach ($viewGroups as $group => $path) {
             $this->publishes([
@@ -100,7 +98,8 @@ class ScribeServiceProvider extends ServiceProvider
             $this->commands([
                 GenerateDocumentation::class,
                 MakeStrategy::class,
-                Upgrade::class,
+                // Retired for the same reasons as the upgrade check
+                // Upgrade::class,
                 DiffConfig::class,
             ]);
         }
@@ -112,7 +111,7 @@ class ScribeServiceProvider extends ServiceProvider
     public function loadCustomTranslationLayer(): void
     {
         $this->app->extend('translation.loader', function ($defaultFileLoader) {
-            return new CustomTranslationsLoader($defaultFileLoader);
+            return app(CustomTranslationsLoader::class, ['loader' => $defaultFileLoader]);
         });
         $this->app->forgetInstance('translator');
         self::$customTranslationLayerLoaded = true;

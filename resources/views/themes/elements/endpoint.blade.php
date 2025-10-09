@@ -15,7 +15,7 @@
         </div>
 
         <div class="sl-relative">
-            <div title="{{ rtrim($baseUrl, '/') . '/'. ltrim($endpoint->uri, '/') }}"
+            <div title="{!! rtrim($baseUrl, '/') . '/'. ltrim($endpoint->uri, '/') !!}"
                      class="sl-stack sl-stack--horizontal sl-stack--3 sl-inline-flex sl-flex-row sl-items-center sl-max-w-full sl-font-mono sl-py-2 sl-pr-4 sl-bg-canvas-50 sl-rounded-lg"
                 >
                     @foreach($endpoint->httpMethods as $method)
@@ -27,7 +27,7 @@
                     @endforeach
                     <div class="sl-flex sl-overflow-x-hidden sl-text-lg sl-select-all">
                         <div dir="rtl"
-                             class="sl-overflow-x-hidden sl-truncate sl-text-muted">{{ rtrim($baseUrl, '/') }}</div>
+                             class="sl-overflow-x-hidden sl-truncate sl-text-muted">{!! rtrim($baseUrl, '/') !!}</div>
                         <div class="sl-flex-1 sl-font-semibold">/{{ ltrim($endpoint->uri, '/') }}</div>
                     </div>
 
@@ -35,6 +35,12 @@
                             <div class="sl-font-prose sl-font-semibold sl-px-1.5 sl-py-0.5 sl-text-on-primary sl-rounded-lg"
                                  style="background-color: darkred"
                             >requires authentication
+                            </div>
+                        @endif
+                        @if($endpoint->metadata->deprecated)
+                            <div class="sl-font-prose sl-font-semibold sl-px-1.5 sl-py-0.5 sl-text-on-primary sl-rounded-lg"
+                                 style="background-color: darkgoldenrod"
+                            >deprecated
                             </div>
                         @endif
             </div>
@@ -81,6 +87,7 @@
                                       'required' => $parameter->required,
                                       'description' => $parameter->description,
                                       'example' => $parameter->example ?? '',
+                                      'enumValues' => $parameter->enumValues,
                                       'endpointId' => $endpoint->endpointId(),
                                       'component' => 'url',
                                       'isInput' => true,
@@ -104,6 +111,7 @@
                                           'required' => $parameter->required,
                                           'description' => $parameter->description,
                                           'example' => $parameter->example ?? '',
+                                          'enumValues' => $parameter->enumValues,
                                           'endpointId' => $endpoint->endpointId(),
                                           'component' => 'query',
                                           'isInput' => true,
@@ -173,7 +181,7 @@
                                 <div class="sl-bg-canvas-100 example-request example-request-{{ $language }}"
                                      style="{{ $index == 0 ? '' : 'display: none;' }}">
                                     <div class="sl-px-0 sl-py-1">
-                                        <div style="max-height: 400px;" class="sl-rounded">
+                                        <div style="max-height: 400px;" class="sl-overflow-y-auto sl-rounded">
                                             @include("scribe::partials.example-requests.$language")
                                         </div>
                                     </div>

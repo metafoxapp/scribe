@@ -37,7 +37,6 @@ function getCookie(name) {
 }
 
 function tryItOut(endpointId) {
-    endpointId = endpointId.replaceAll('.', '\\.');
     document.querySelector(`#btn-tryout-${endpointId}`).hidden = true;
     document.querySelector(`#btn-canceltryout-${endpointId}`).hidden = false;
     const executeBtn = document.querySelector(`#btn-executetryout-${endpointId}`).hidden = false;
@@ -140,6 +139,17 @@ function handleResponse(endpointId, response, status, headers) {
 
     const responseContentEl = document.querySelector('#execution-response-content-' + endpointId);
 
+    // Check if the response contains Laravel's  dd() default dump output
+    const isLaravelDump = response.includes('Sfdump');
+
+    // If it's a Laravel dd() dump, use innerHTML to render it safely
+    if (isLaravelDump) {
+        responseContentEl.innerHTML = response === '' ? responseContentEl.dataset.emptyResponseText : response;
+    } else {
+        // Otherwise, stick to textContent for regular responses
+        responseContentEl.textContent = response === '' ? responseContentEl.dataset.emptyResponseText : response;
+    }
+
     // Prettify it if it's JSON
     let isJson = false;
     try {
@@ -147,11 +157,12 @@ function handleResponse(endpointId, response, status, headers) {
         if (jsonParsed !== null) {
             isJson = true;
             response = JSON.stringify(jsonParsed, null, 4);
+            responseContentEl.textContent = response;
         }
     } catch (e) {
 
     }
-    responseContentEl.textContent = response === '' ? responseContentEl.dataset.emptyResponseText : response;
+
     isJson && window.hljs.highlightElement(responseContentEl);
     const statusEl = document.querySelector('#execution-response-status-' + endpointId);
     statusEl.textContent = ` (${status})`;
@@ -195,6 +206,11 @@ async function executeTryOut(endpointId, form) {
     const bodyParameters = form.querySelectorAll('input[data-component=body]');
     bodyParameters.forEach(el => {
         let value = el.value;
+
+        if (el.type === 'number' && typeof value === 'string') {
+            value = parseFloat(value);
+        }
+
         if (el.type === 'file' && el.files[0]) {
             setter(el.name, el.files[0]);
             return;

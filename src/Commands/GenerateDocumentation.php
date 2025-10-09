@@ -3,17 +3,20 @@
 namespace Knuckles\Scribe\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Foundation\Application;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 use Knuckles\Camel\Camel;
 use Knuckles\Scribe\GroupedEndpoints\GroupedEndpointsFactory;
 use Knuckles\Scribe\Matching\RouteMatcherInterface;
+use Knuckles\Scribe\Scribe;
+use Knuckles\Scribe\Tools\ConfigDiffer;
 use Knuckles\Scribe\Tools\ConsoleOutputUtils as c;
 use Knuckles\Scribe\Tools\DocumentationConfig;
 use Knuckles\Scribe\Tools\ErrorHandlingUtils as e;
 use Knuckles\Scribe\Tools\Globals;
-use Knuckles\Scribe\Scribe;
+use Knuckles\Scribe\Tools\PathConfig;
 use Knuckles\Scribe\Writing\Writer;
 use Shalvah\Upgrader\Upgrader;
 
@@ -23,10 +26,11 @@ class GenerateDocumentation extends Command
                             {--force : Discard any changes you've made to the YAML or Markdown files}
                             {--no-extraction : Skip extraction of route and API info and just transform the YAML and Markdown files into HTML}
                             {--no-upgrade-check : Skip checking for config file upgrades. Won't make things faster, but can be helpful if the command is buggy}
-                            {--config=scribe : choose which config file to use}
+                            {--config=scribe : Choose which config file to use}
+                            {--scribe-dir= : Specify the directory where Scribe stores its intermediate output and cache. Defaults to `.<config_file>`}
     ";
 
-    protected $description = 'Generate API documentation from your Laravel/Dingo routes.';
+    protected $description = 'Generate API documentation from your Laravel routes.';
 
     protected DocumentationConfig $docConfig;
 
@@ -34,7 +38,7 @@ class GenerateDocumentation extends Command
 
     protected bool $forcing;
 
-    protected string $configName;
+    protected PathConfig $paths;
 
     public function handle(RouteMatcherInterface $routeMatcher, GroupedEndpointsFactory $groupedEndpointsFactory): void
     {
@@ -47,9 +51,9 @@ class GenerateDocumentation extends Command
         }
 
         // Extraction stage - extract endpoint info either from app or existing Camel files (previously extracted data)
-        $groupedEndpointsInstance = $groupedEndpointsFactory->make($this, $routeMatcher, $this->configName);
+        $groupedEndpointsInstance = $groupedEndpointsFactory->make($this, $routeMatcher, $this->paths);
         $extractedEndpoints = $groupedEndpointsInstance->get();
-        $userDefinedEndpoints = Camel::loadUserDefinedEndpoints(Camel::camelDir($this->configName));
+        $userDefinedEndpoints = Camel::loadUserDefinedEndpoints(Camel::camelDir($this->paths));
         $groupedEndpoints = $this->mergeUserDefinedEndpoints($extractedEndpoints, $userDefinedEndpoints);
 
         // Output stage
@@ -61,10 +65,12 @@ class GenerateDocumentation extends Command
             $this->writeExampleCustomEndpoint();
         }
 
-        $writer = new Writer($this->docConfig, $this->configName);
+        /** @var Writer $writer */
+        $writer = app(Writer::class, ['config' => $this->docConfig, 'paths' => $this->paths]);
         $writer->writeDocs($groupedEndpoints);
 
-        $this->upgradeConfigFileIfNeeded();
+        // Retiring the automatic upgrade check, since the config file is no longer changing as frequently.
+        // $this->upgradeConfigFileIfNeeded();
 
         $this->sayGoodbye(errored: $groupedEndpointsInstance->hasEncounteredErrors());
     }
@@ -98,16 +104,29 @@ class GenerateDocumentation extends Command
 
         c::bootstrapOutput($this->output);
 
-        $this->configName = $this->option('config');
-        if (!config($this->configName)) {
-            throw new \InvalidArgumentException("The specified config (config/{$this->configName}.php) doesn't exist.");
+        $configName = $this->option('config');
+        if (!config($configName)) {
+            throw new \InvalidArgumentException("The specified config (config/{$configName}.php) doesn't exist.");
         }
 
-        $this->docConfig = new DocumentationConfig(config($this->configName));
+        $this->paths = new PathConfig($configName);
+        if ($this->hasOption('scribe-dir') && !empty($this->option('scribe-dir'))) {
+            $this->paths = new PathConfig(
+                $configName, scribeDir: $this->option('scribe-dir')
+            );
+        }
+
+        $this->docConfig = new DocumentationConfig(config($this->paths->configName));
 
         // Force root URL so it works in Postman collection
         $baseUrl = $this->docConfig->get('base_url') ?? config('app.url');
-        URL::forceRootUrl($baseUrl);
+
+        try {
+            // Renamed from forceRootUrl in Laravel 11.43 or so
+            URL::useOrigin($baseUrl);
+        } catch (\BadMethodCallException) {
+            URL::forceRootUrl($baseUrl);
+        }
 
         $this->forcing = $this->option('force');
         $this->shouldExtract = !$this->option('no-extraction');
@@ -146,7 +165,7 @@ class GenerateDocumentation extends Command
     protected function writeExampleCustomEndpoint(): void
     {
         // We add an example to guide users in case they need to add a custom endpoint.
-        copy(__DIR__ . '/../../resources/example_custom_endpoint.yaml', Camel::camelDir($this->configName) . '/custom.0.yaml');
+        copy(__DIR__ . '/../../resources/example_custom_endpoint.yaml', Camel::camelDir($this->paths) . '/custom.0.yaml');
     }
 
     protected function upgradeConfigFileIfNeeded(): void
@@ -155,35 +174,32 @@ class GenerateDocumentation extends Command
 
         $this->info("Checking for any pending upgrades to your config file...");
         try {
-            if (! $this->laravel['files']->exists($this->laravel->configPath("{$this->configName}.php"))) {
-                $this->info("No config file to upgrade.");
-                return;
-            }
+            $defaultConfig = require __DIR__."/../../config/scribe.php";
+            $ignore = ['example_languages', 'routes', 'description', 'auth.extra_info', "intro_text", "groups", "database_connections_to_transact"];
+            $asList = ['strategies.*', "examples.models_source"];
+            $differ = new ConfigDiffer(original: $this->docConfig->data, changed: $defaultConfig, ignorePaths: $ignore, asList: $asList);
 
-            $upgrader = Upgrader::ofConfigFile("config/{$this->configName}.php", __DIR__ . '/../../config/scribe.php')
-                ->dontTouch(
-                    'routes', 'example_languages', 'database_connections_to_transact', 'strategies', 'laravel.middleware',
-                    'postman.overrides', 'openapi.overrides', 'groups', 'examples.models_source'
-                );
-            $changes = $upgrader->dryRun();
-            if (!empty($changes)) {
+            $diff = $differ->getDiff();
+            // Remove items the user has set
+            $realDiff = [];
+            foreach ($diff as $key => $value) {
+                if (is_null($this->docConfig->get($key))) {
+                    $realDiff[$key] = $value;
+                }
+            }
+            if (!empty($realDiff)) {
                 $this->newLine();
 
-                $this->warn("You're using an updated version of Scribe, which added new items to the config file.");
-                $this->info("Here are the changes:");
-                foreach ($changes as $change) {
-                    $this->info($change["description"]);
+                $this->warn("You're using an updated version of Scribe, which may have added new items to the config file.");
+                $this->info("Here's what is different:");
+                foreach ($realDiff as $key => $item) {
+                    $this->line("$key --now defaults to-> $item");
                 }
 
                 if (!$this->input->isInteractive()) {
-                    $this->info("Run `php artisan scribe:upgrade` from an interactive terminal to update your config file automatically.");
-                    $this->info(sprintf("Or see the full changelog at: https://github.com/knuckleswtf/scribe/blob/%s/CHANGELOG.md,", Scribe::VERSION));
+                    $this->info(sprintf("To upgrade, see the full changelog at: https://github.com/knuckleswtf/scribe/blob/%s/CHANGELOG.md,", Scribe::VERSION));
+                    $this->info("And config reference at https://scribe.knuckles.wtf/laravel/reference/config");
                     return;
-                }
-
-                if ($this->confirm("Let's help you update your config file. Accept changes?")) {
-                    $upgrader->upgrade();
-                    $this->info(sprintf("✔ Updated. See the full changelog: https://github.com/knuckleswtf/scribe/blob/%s/CHANGELOG.md", Scribe::VERSION));
                 }
             }
         } catch (\Throwable $e) {
@@ -197,7 +213,7 @@ class GenerateDocumentation extends Command
     protected function sayGoodbye(bool $errored = false): void
     {
         $message = 'All done. ';
-        if ($this->docConfig->get('type') == 'laravel') {
+        if ($this->docConfig->outputRoutedThroughLaravel()) {
             if ($this->docConfig->get('laravel.add_routes')) {
                 $message .= 'Visit your docs at ' . url($this->docConfig->get('laravel.docs_url'));
             }

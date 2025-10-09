@@ -8,6 +8,8 @@
 <p>
 @component('scribe::components.badges.auth', ['authenticated' => $endpoint->isAuthed()])
 @endcomponent
+@component('scribe::components.badges.deprecated', ['deprecated' => $endpoint->isDeprecated()])
+@endcomponent
 </p>
 
 {!! Parsedown::instance()->text($endpoint->metadata->description ?: '') !!}
@@ -132,6 +134,7 @@
                   'required' => $parameter->required,
                   'description' => $parameter->description,
                   'example' => $parameter->example ?? '',
+                  'enumValues' => $parameter->enumValues,
                   'endpointId' => $endpoint->endpointId(),
                   'component' => 'url',
                   'isInput' => true,
@@ -156,6 +159,7 @@
                   'required' => $parameter->required,
                   'description' => $parameter->description,
                   'example' => $parameter->example ?? '',
+                  'enumValues' => $parameter->enumValues,
                   'endpointId' => $endpoint->endpointId(),
                   'component' => 'query',
                   'isInput' => true,

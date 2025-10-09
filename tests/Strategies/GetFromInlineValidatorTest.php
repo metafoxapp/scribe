@@ -26,7 +26,7 @@ class GetFromInlineValidatorTest extends BaseLaravelTest
         'room_id' => [
             'type' => 'string',
             'required' => false,
-            'description' => 'The id of the room. Must be one of <code>3</code>, <code>5</code>, or <code>6</code>.',
+            'description' => 'The id of the room.',
         ],
         'forever' => [
             'type' => 'boolean',
@@ -131,6 +131,58 @@ class GetFromInlineValidatorTest extends BaseLaravelTest
     }
 
     /** @test */
+    public function can_fetch_from_request_validate_facade_assignment()
+    {
+        $endpoint = $this->endpoint(function (ExtractedEndpointData $e) {
+            $e->method = new \ReflectionMethod(TestController::class, 'withInlineRequestValidateFacade');
+        });
+
+        $results = $this->fetchViaBodyParams($endpoint);
+
+        $this->assertArraySubset(self::$expected, $results);
+        $this->assertIsArray($results['ids']['example']);
+    }
+
+    /** @test */
+    public function can_fetch_from_request_validate_facade_expression()
+    {
+        $endpoint = $this->endpoint(function (ExtractedEndpointData $e) {
+            $e->method = new \ReflectionMethod(TestController::class, 'withInlineRequestValidateFacadeNoAssignment');
+        });
+
+        $results = $this->fetchViaBodyParams($endpoint);
+
+        $this->assertArraySubset(self::$expected, $results);
+        $this->assertIsArray($results['ids']['example']);
+    }
+
+    /** @test */
+    public function can_fetch_from_request_validate_facade_with_full_import()
+    {
+        $endpoint = $this->endpoint(function (ExtractedEndpointData $e) {
+            $e->method = new \ReflectionMethod(TestController::class, 'withInlineRequestValidateFacadeWithFullImport');
+        });
+
+        $results = $this->fetchViaBodyParams($endpoint);
+
+        $this->assertArraySubset(self::$expected, $results);
+        $this->assertIsArray($results['ids']['example']);
+    }
+
+    /** @test */
+    public function can_fetch_from_request_validatewithbag_facade()
+    {
+        $endpoint = $this->endpoint(function (ExtractedEndpointData $e) {
+            $e->method = new \ReflectionMethod(TestController::class, 'withInlineRequestValidateWithBagFacade');
+        });
+
+        $results = $this->fetchViaBodyParams($endpoint);
+
+        $this->assertArraySubset(self::$expected, $results);
+        $this->assertIsArray($results['ids']['example']);
+    }
+
+    /** @test */
     public function can_fetch_from_this_validate()
     {
         $endpoint = $this->endpoint(function (ExtractedEndpointData $e) {
@@ -148,6 +200,19 @@ class GetFromInlineValidatorTest extends BaseLaravelTest
     {
         $endpoint = $this->endpoint(function (ExtractedEndpointData $e) {
             $e->method = new \ReflectionMethod(TestController::class, 'withInlineValidatorMake');
+        });
+
+        $results = $this->fetchViaBodyParams($endpoint);
+
+        $this->assertArraySubset(self::$expected, $results);
+        $this->assertIsArray($results['ids']['example']);
+    }
+
+    /** @test */
+    public function can_fetch_from_validator_make_validate()
+    {
+        $endpoint = $this->endpoint(function (ExtractedEndpointData $e) {
+            $e->method = new \ReflectionMethod(TestController::class, 'withInlineValidatorMakeValidate');
         });
 
         $results = $this->fetchViaBodyParams($endpoint);
@@ -180,10 +245,6 @@ class GetFromInlineValidatorTest extends BaseLaravelTest
     /** @test */
     public function can_fetch_inline_enum_rules()
     {
-        if (phpversion() < 8.1) {
-            $this->markTestSkipped('Enums are only supported in PHP 8.1 or later');
-        }
-
         $endpoint = $this->endpoint(function (ExtractedEndpointData $e) {
             $e->method = new \ReflectionMethod(TestController::class, 'withEnumRule');
         });
@@ -193,15 +254,15 @@ class GetFromInlineValidatorTest extends BaseLaravelTest
         $expected = [
             'enum_class' => [
                 'type' => 'string',
-                'description' => 'Must be one of <code>red</code>, <code>green</code>, or <code>blue</code>.',
+                'description' => '',
                 'required' => true,
             ],
             'enum_string' => [
                 'type' => 'string',
-                'description' => 'Must be one of <code>1</code>, <code>2</code>, or <code>3</code>.',
+                'description' => '',
                 'required' => true,
             ],
-            'enum_inexistent' => [
+            'enum_nonexistent' => [
                 'type' => 'string',
                 'description' => 'Not full path class call won\'t work.',
                 'required' => true,

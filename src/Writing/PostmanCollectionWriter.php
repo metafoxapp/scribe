@@ -21,7 +21,7 @@ class PostmanCollectionWriter
 
     protected string $baseUrl;
 
-    public function __construct(DocumentationConfig $config = null)
+    public function __construct(?DocumentationConfig $config = null)
     {
         $this->config = $config ?: new DocumentationConfig(config('scribe', []));
         $this->baseUrl = $this->config->get('base_url') ?: config('app.url');
@@ -45,10 +45,10 @@ class PostmanCollectionWriter
                 ],
                 [
                     'id' => 'accessToken',
-                    'key' => 'accessToken',
+                    'key' => 'acessToken',
                     'type' => 'string',
                     'name' => 'string',
-                    'value' => '',
+                    'value' => "",
                 ],
             ],
             'info' => [
@@ -87,7 +87,6 @@ class PostmanCollectionWriter
                 'bearer' => [
                     [
                         'key'   => $this->config->get('auth.name'),
-                        'value' => $this->config->get('auth.use_value'),
                         'type'  => 'string',
                     ],
                 ],
@@ -153,7 +152,7 @@ class PostmanCollectionWriter
         }
 
         $endpointItem = [
-            'name' => $this->generatePathName($endpoint->uri),
+            'name' => $this->formatItemName($endpoint),
             'request' => [
                 'url' => $this->generateUrlObject($endpoint),
                 'method' => $method,
@@ -230,7 +229,7 @@ class PostmanCollectionWriter
             if (!is_array($value)) {
                 $body[] = [
                     'key' => $index,
-                    'value' => $value,
+                    'value' => (string) $value,
                     'type' => 'text',
                     'description' => $paramsFullDetails[$index]->description ?? '',
                 ];
@@ -272,25 +271,22 @@ class PostmanCollectionWriter
         return $headers;
     }
 
-    protected function generatePathName($uri){
-        $path = $uri;
-        if(str_starts_with($path, 'api/{ver}')){
-            $path = substr($path, 10);
-            $path = preg_replace_callback('/\{(\w+)\??}/', function ($matches) {
+    protected function formatItemName($endpoint){
+        return ($endpoint->httpMethods[0] . ' ' . ltrim($this->formatURIPath($endpoint->uri),'/')) . ($endpoint->metadata->deprecated ? ' [DEPRECATED]' : '');
+    }
+
+    protected function formatURIPath($uri){
+        return str_replace('api/:ver/', '/', preg_replace_callback('/\{(\w+)\??}/', function ($matches) {
                 return ':' . $matches[1];
-            }, $path);
-        }
-        return $path;
+            }, $uri));
     }
 
     protected function generateUrlObject(OutputEndpointData $endpointData): array
     {
-
-
         $base = [
             'host' => '{{baseUrl}}',
             // Change laravel/symfony URL params ({example}) to Postman style, prefixed with a colon
-            'path' => $this->generatePathName($endpointData->uri),
+            'path' =>  $this->formatURIPath($endpointData->uri)
         ];
 
         $query = [];
@@ -312,7 +308,7 @@ class PostmanCollectionWriter
                     // See https://www.php.net/manual/en/function.parse-str.php
                     $query[] = [
                         'key' => "{$name}[$index]",
-                        'value' => $value,
+                        'value' => is_string($value) ? $value : strval($value),
                         'description' => strip_tags($parameterData->description),
                         // Default query params to disabled if they aren't required and have empty values
                         'disabled' => !$parameterData->required && empty($parameterData->example),
@@ -347,7 +343,10 @@ class PostmanCollectionWriter
         })->implode('&');
         $base['raw'] = sprintf('%s/%s%s', $base['host'], $base['path'], $queryString ? "?{$queryString}" : null);
 
-        $urlParams = collect($endpointData->urlParameters);
+        $urlParams = collect($endpointData->urlParameters)->filter(function (Parameter $value, $name) {
+            return $name != 'ver';
+        });
+
         if ($urlParams->isEmpty()) {
             return $base;
         }
