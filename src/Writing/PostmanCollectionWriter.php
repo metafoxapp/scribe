@@ -86,8 +86,8 @@ class PostmanCollectionWriter
                 'type' => 'bearer',
                 'bearer' => [
                     [
-                        'key'   => $this->config->get('auth.name'),
-                        'type'  => 'string',
+                        'key' => $this->config->get('auth.name'),
+                        'type' => 'string',
                     ],
                 ],
             ],
@@ -141,8 +141,10 @@ class PostmanCollectionWriter
 
         $bodyParameters = empty($endpoint->bodyParameters) ? null : $this->getBodyData($endpoint);
 
-        if ((in_array('PUT', $endpoint->httpMethods) || in_array('PATCH', $endpoint->httpMethods))
-            && isset($bodyParameters['formdata'])) {
+        if (
+            (in_array('PUT', $endpoint->httpMethods) || in_array('PATCH', $endpoint->httpMethods))
+            && isset($bodyParameters['formdata'])
+        ) {
             $method = 'POST';
             $bodyParameters['formdata'][] = [
                 'key' => '_method',
@@ -187,7 +189,9 @@ class PostmanCollectionWriter
             case 'formdata':
             case 'urlencoded':
                 $body[$inputMode] = $this->getFormDataParams(
-                    $endpoint->cleanBodyParameters, null, $endpoint->bodyParameters
+                    $endpoint->cleanBodyParameters,
+                    null,
+                    $endpoint->bodyParameters
                 );
                 foreach ($endpoint->fileParameters as $key => $value) {
                     while (is_array($value)) {
@@ -197,7 +201,7 @@ class PostmanCollectionWriter
                             $key .= '[]';
                             $value = $value[0];
                         } else {
-                            $key .= '['.$keys[0].']';
+                            $key .= '[' . $keys[0] . ']';
                             $value = $value[$keys[0]];
                         }
                     }
@@ -271,14 +275,16 @@ class PostmanCollectionWriter
         return $headers;
     }
 
-    protected function formatItemName($endpoint){
-        return ($endpoint->httpMethods[0] . ' ' . ltrim($this->formatURIPath($endpoint->uri),'/')) . ($endpoint->metadata->deprecated ? ' [DEPRECATED]' : '');
+    protected function formatItemName($endpoint)
+    {
+        return (ltrim($this->formatURIPath($endpoint->uri), '/')) . ($endpoint->metadata->deprecated ? ' [DEPRECATED]' : '');
     }
 
-    protected function formatURIPath($uri){
+    protected function formatURIPath($uri)
+    {
         return str_replace('api/:ver/', '/', preg_replace_callback('/\{(\w+)\??}/', function ($matches) {
-                return ':' . $matches[1];
-            }, $uri));
+            return ':' . $matches[1];
+        }, $uri));
     }
 
     protected function generateUrlObject(OutputEndpointData $endpointData): array
@@ -286,7 +292,7 @@ class PostmanCollectionWriter
         $base = [
             'host' => '{{baseUrl}}',
             // Change laravel/symfony URL params ({example}) to Postman style, prefixed with a colon
-            'path' =>  $this->formatURIPath($endpointData->uri)
+            'path' => $this->formatURIPath($endpointData->uri)
         ];
 
         $query = [];
